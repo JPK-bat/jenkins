@@ -1,2 +1,2 @@
 print ("Hello World");
-print ("Poll SCM triggered successfully");
+print ("POLL SCM triggered successfully");
