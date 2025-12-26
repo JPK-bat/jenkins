@@ -1,9 +1,9 @@
 pipeline {
     agent {
         node {
-          label 'docker-agent-python'
+            label 'docker-agent-python'
+        }
     }
-  }
 
     stages {
         stage('Checkout') {
@@ -15,7 +15,6 @@ pipeline {
         stage('Build') {
             steps {
                 echo "Building the application..."
-                // Example:
                 // sh 'mvn clean package'
                 echo "Build success"
             }
@@ -33,7 +32,9 @@ pipeline {
             steps {
                 echo "Deploying..."
                 sh '''
-                echo "Deployment success"
-           }
+                    echo "Deployment success"
+                '''
+            }
+        }
     }
 }
