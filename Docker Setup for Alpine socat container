@@ -1,0 +1,14 @@
+# Pull Alpine socat Docker image
+docker build -t alpine/socat:latest
+
+# alpine/socat container to forward traffic from Jenkins to Docker Desktop on Host Machine
+docker run -d \
+  --name jenkins-socat \
+  --restart=always \
+  --network jenkins \
+  -p 2376:2375 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  alpine/socat \
+  tcp-listen:2375,fork,reuseaddr unix-connect:/var/run/docker.sock
+
+# Make sure that both jenkins blueocean and alpine containers are in same network Jenkins
