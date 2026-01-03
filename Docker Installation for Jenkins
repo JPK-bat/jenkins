@@ -1,5 +1,5 @@
 # Build the Jenkins BlueOcean Docker Image
-docker build -t myjenkins-blueocean:latest
+docker build -t myjenkins-blueocean:latest .
 
 # Create the network 'jenkins'
 docker network create jenkins
