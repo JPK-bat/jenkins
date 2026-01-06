@@ -1,0 +1,139 @@
+pipeline {
+agent { label '' }
+environment {
+        AWS_REGION      = ''
+        ECR_REPO        = ''
+        IMAGE_NAME      = ''
+        IMAGE_TAG       = ''
+        TASK_DEF_FAMILY = ''
+        SERVICE_NAME    = ''
+        CLUSTER_NAME    = ''
+        CONTAINER_NAME  = ''
+    }
+    stages {
+        stage('Checkout Code') {
+            steps {
+                checkout scm
+            }
+        }
+        stage('Login to AWS ECR') {
+            steps {
+                sh '''
+                echo "Logging into AWS ECR..."
+                aws ecr get-login-password --region $AWS_REGION \
+                | docker login --username AWS --password-stdin $ECR_REPO
+                '''
+            }
+        }
+        stage('Build Docker Image') {
+            steps {
+                sh '''
+                echo "Building Docker image without cache..."
+                docker build --no-cache -t $IMAGE_NAME .
+                '''
+            }
+        }
+        stage('Extract JAR from Docker Image') {
+            steps {
+                sh '''
+                echo "Extracting app.jar from Docker build..."
+
+                # Create temporary container
+                docker create --name temp_extract $IMAGE_NAME:latest
+
+                # Copy final runtime JAR from container
+                docker cp temp_extract:/app/app.jar app.jar
+
+                # Cleanup
+                docker rm temp_extract
+
+                echo "Extracted JAR stored as app.jar"
+                '''
+            }
+        }
+        stage('Archive JAR Artifact') {
+            steps {
+                echo "Archiving ONLY the final application JAR..."
+                archiveArtifacts artifacts: 'app.jar', fingerprint: true
+            }
+        }
+        stage('Tag Docker Image') {
+            steps {
+                sh '''
+                echo "Tagging Docker image..."
+                docker tag $IMAGE_NAME:latest $ECR_REPO:$IMAGE_TAG
+                '''
+            }
+        }
+        stage('Push to ECR') {
+            steps {
+                sh '''
+                echo "Pushing Docker image to AWS ECR..."
+                docker push $ECR_REPO:$IMAGE_TAG
+                '''
+            }
+        }
+        stage('Create New Task Revision') {
+            steps {
+                sh '''
+                echo "Getting current task definition..."
+                aws ecs describe-task-definition \
+                    --task-definition $TASK_DEF_FAMILY \
+                    --region $AWS_REGION > task-def.json
+
+                echo "Generating new task definition..."
+                jq --arg IMAGE "$ECR_REPO:$IMAGE_TAG" '
+                    .taskDefinition
+                    | .containerDefinitions[0].image = $IMAGE
+                    | del(
+                        .taskDefinitionArn,
+                        .revision,
+                        .status,
+                        .requiresAttributes,
+                        .compatibilities,
+                        .registeredAt,
+                        .registeredBy
+                    )
+                ' task-def.json > new-task-def.json
+
+                echo "Registering new task definition..."
+                NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
+                    --cli-input-json file://new-task-def.json \
+                    --query 'taskDefinition.taskDefinitionArn' \
+                    --output text)
+
+                echo $NEW_TASK_DEF_ARN > task-def-arn.txt
+                '''
+            }
+        }
+        stage('Update ECS Service') {
+            steps {
+                script {
+                    def taskDefArn = readFile('task-def-arn.txt').trim()
+                    env.NEW_TASK_DEF_ARN = taskDefArn
+                }
+                sh '''
+                    echo "Updating ECS service with new task definition..."
+                    DEPLOYMENT_ID=$(aws ecs update-service \
+                        --cluster $CLUSTER_NAME \
+                        --service $SERVICE_NAME \
+                        --task-definition $NEW_TASK_DEF_ARN \
+                        --region $AWS_REGION \
+                        --query 'service.deployments[0].id' \
+                        --output text)
+                    echo "Deployment ID: $DEPLOYMENT_ID"
+                    echo $DEPLOYMENT_ID > deployment-id.txt
+
+                    echo "Waiting for ECS deployment to stabilize..."
+                    aws ecs wait services-stable \
+                        --cluster $CLUSTER_NAME \
+                        --services $SERVICE_NAME \
+                        --region $AWS_REGION
+
+                    echo "Deployment successful! ECS service is stable."
+                '''
+                }
+            }
+        }
+    }
+}
